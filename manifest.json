@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube Downloader (yt-dlp)",
+  "version": "1.0.0",
+  "description": "Download YouTube videos via yt-dlp native messaging",
+  "permissions": ["nativeMessaging", "activeTab"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.youtube.com/*"],
+      "js": ["content.js"]
+    }
+  ],
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}

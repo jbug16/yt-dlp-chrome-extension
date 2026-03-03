@@ -1,0 +1,7 @@
+{
+  "name": "com.ytdlp.downloader",
+  "description": "yt-dlp download host for Chrome extension",
+  "path": "PLACEHOLDER_HOST_PATH",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://PLACEHOLDER_EXTENSION_ID/"]
+}

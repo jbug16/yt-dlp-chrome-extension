@@ -9,8 +9,14 @@ document.addEventListener("DOMContentLoaded", () => {
   const qualitySelect = document.getElementById("quality");
   const downloadBtn = document.getElementById("download-btn");
   const statusDiv = document.getElementById("status");
+  const versionBadge = document.getElementById("version-badge");
 
   let currentUrl = null;
+  let currentStatus = { state: "idle" };
+
+  const manifestVersion = chrome.runtime.getManifest().version;
+  const displayVersion = manifestVersion.split(".").slice(0, 2).join(".");
+  versionBadge.textContent = `v${displayVersion}`;
 
   // Query the active tab and ask content script for video info
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -50,6 +56,7 @@ document.addEventListener("DOMContentLoaded", () => {
     videoTitle.textContent = info.title;
     videoChannel.textContent = info.channel;
     currentUrl = info.url;
+    renderDownloadStatus(currentStatus);
   }
 
   function setStatus(type, message) {
@@ -82,6 +89,57 @@ document.addEventListener("DOMContentLoaded", () => {
     statusDiv.appendChild(btn);
   }
 
+  function renderDownloadStatus(status) {
+    currentStatus = status || { state: "idle" };
+
+    if (!currentUrl) {
+      return;
+    }
+
+    if (currentStatus.state === "downloading") {
+      downloadBtn.disabled = true;
+      const message =
+        currentStatus.url === currentUrl
+          ? currentStatus.message || "Downloading in background..."
+          : "Another download is running in background...";
+      setStatus("downloading", message);
+      return;
+    }
+
+    downloadBtn.disabled = false;
+
+    if (currentStatus.url && currentStatus.url !== currentUrl) {
+      statusDiv.style.display = "none";
+      return;
+    }
+
+    if (currentStatus.state === "complete") {
+      setStatus("complete", "Downloaded: " + (currentStatus.filename || "download complete"));
+      showFinderButton(currentStatus.filepath);
+    } else if (currentStatus.state === "error") {
+      setStatus("error", "Error: " + (currentStatus.message || "Download failed"));
+    } else {
+      statusDiv.style.display = "none";
+    }
+  }
+
+  function refreshDownloadStatus() {
+    chrome.runtime.sendMessage({ action: "getDownloadStatus" }, (status) => {
+      if (chrome.runtime.lastError) {
+        return;
+      }
+      renderDownloadStatus(status);
+    });
+  }
+
+  chrome.runtime.onMessage.addListener((request) => {
+    if (request.action === "downloadStatusChanged") {
+      renderDownloadStatus(request.status);
+    }
+  });
+
+  refreshDownloadStatus();
+
   downloadBtn.addEventListener("click", () => {
     if (!currentUrl) return;
 
@@ -112,17 +170,15 @@ document.addEventListener("DOMContentLoaded", () => {
         break;
     }
 
-    const message = {
-      action: "download",
+    const downloadRequest = {
       url: currentUrl,
       format: format,
       audioOnly: quality === "audio",
     };
 
-    chrome.runtime.sendNativeMessage(NATIVE_HOST, message, (response) => {
-      downloadBtn.disabled = false;
-
+    chrome.runtime.sendMessage({ action: "startDownload", ...downloadRequest }, (response) => {
       if (chrome.runtime.lastError) {
+        downloadBtn.disabled = false;
         setStatus(
           "error",
           "Connection failed: " + chrome.runtime.lastError.message
@@ -130,19 +186,16 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
-      if (!response) {
-        setStatus("error", "No response from native host");
+      if (!response || !response.ok) {
+        downloadBtn.disabled = false;
+        if (response?.status) {
+          renderDownloadStatus(response.status);
+        }
+        setStatus("error", response?.error || "Could not start download");
         return;
       }
 
-      if (response.status === "complete") {
-        setStatus("complete", "Downloaded: " + response.filename);
-        showFinderButton(response.filepath);
-      } else if (response.status === "error") {
-        setStatus("error", "Error: " + response.message);
-      } else {
-        setStatus("error", "Unexpected response");
-      }
+      renderDownloadStatus(response.status);
     });
   });
 });

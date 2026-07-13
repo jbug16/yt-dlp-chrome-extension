@@ -15,8 +15,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let currentStatus = { state: "idle" };
 
   const manifestVersion = chrome.runtime.getManifest().version;
-  const displayVersion = manifestVersion.split(".").slice(0, 2).join(".");
-  versionBadge.textContent = `v${displayVersion}`;
+  versionBadge.textContent = `v${manifestVersion}`;
 
   // Query the active tab and ask content script for video info
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {

@@ -2,6 +2,8 @@ const NATIVE_HOST = "com.ytdlp.downloader";
 const DOWNLOAD_STATUS_KEY = "downloadStatus";
 
 let activeDownload = null;
+const downloadQueue = [];
+const statusByUrl = new Map();
 
 function publicStatus(status) {
   if (!status) {
@@ -14,6 +16,7 @@ function publicStatus(status) {
 
 function saveStatus(status) {
   const safeStatus = publicStatus(status);
+  if (safeStatus.url) statusByUrl.set(safeStatus.url, { ...safeStatus });
   chrome.storage.local.set({ [DOWNLOAD_STATUS_KEY]: safeStatus }, () => {
     chrome.runtime.sendMessage(
       { action: "downloadStatusChanged", status: safeStatus },
@@ -30,17 +33,13 @@ function setDownloadStatus(status) {
   saveStatus(status);
 }
 
-function startDownload(request, sendResponse) {
-  if (activeDownload) {
-    sendResponse({ ok: false, status: publicStatus(activeDownload), error: "Download already in progress" });
-    return;
-  }
-
+function runDownload(request) {
   const status = {
     state: "downloading",
     url: request.url,
     startedAt: Date.now(),
     message: "Downloading in background...",
+    queuedCount: downloadQueue.length,
   };
 
   try {
@@ -50,76 +49,74 @@ function startDownload(request, sendResponse) {
     saveStatus(status);
 
     let completed = false;
+    const finish = (result) => {
+      if (completed) return;
+      completed = true;
+      setDownloadStatus(result);
+      const next = downloadQueue.shift();
+      if (next) runDownload(next);
+    };
 
     port.onMessage.addListener((response) => {
-      completed = true;
-
-      if (response && response.status === "complete") {
-        setDownloadStatus({
-          state: "complete",
-          url: request.url,
-          filename: response.filename,
-          filepath: response.filepath,
-          finishedAt: Date.now(),
-        });
-      } else if (response && response.status === "error") {
-        setDownloadStatus({
-          state: "error",
-          url: request.url,
-          message: response.message || "Download failed",
-          finishedAt: Date.now(),
-        });
+      if (response?.status === "progress") {
+        status.progress = response.percent || 0;
+        status.message = `Downloading… ${Math.round(status.progress)}%`;
+        saveStatus(status);
+      } else if (response?.status === "complete") {
+        finish({ state: "complete", url: request.url, filename: response.filename, filepath: response.filepath, finishedAt: Date.now() });
       } else {
-        setDownloadStatus({
-          state: "error",
-          url: request.url,
-          message: "Unexpected response from native host",
-          finishedAt: Date.now(),
-        });
+        finish({ state: "error", url: request.url, message: response?.message || "Unexpected response from native host", finishedAt: Date.now() });
       }
     });
 
     port.onDisconnect.addListener(() => {
-      if (completed) {
-        return;
+      if (!completed) {
+        finish({ state: "error", url: request.url, message: chrome.runtime.lastError?.message || "Native host disconnected before the download completed", finishedAt: Date.now() });
       }
-
-      setDownloadStatus({
-        state: "error",
-        url: request.url,
-        message:
-          chrome.runtime.lastError?.message ||
-          "Native host disconnected before the download completed",
-        finishedAt: Date.now(),
-      });
     });
 
-    port.postMessage({
-      action: "download",
-      url: request.url,
-      format: request.format,
-      audioOnly: request.audioOnly,
-    });
-
-    sendResponse({ ok: true, status: publicStatus(status) });
+    port.postMessage({ action: "download", url: request.url, format: request.format, audioOnly: request.audioOnly });
+    return true;
   } catch (error) {
-    setDownloadStatus({
-      state: "error",
-      url: request.url,
-      message: error.message || String(error),
-      finishedAt: Date.now(),
-    });
-    sendResponse({ ok: false, error: error.message || String(error) });
+    setDownloadStatus({ state: "error", url: request.url, message: error.message || String(error), finishedAt: Date.now() });
+    const next = downloadQueue.shift();
+    if (next) runDownload(next);
+    return false;
   }
 }
 
+function startDownload(request, sendResponse) {
+  if (activeDownload) {
+    downloadQueue.push({ url: request.url, format: request.format, audioOnly: request.audioOnly });
+    statusByUrl.set(request.url, {
+      state: "queued",
+      url: request.url,
+      position: downloadQueue.length,
+    });
+    activeDownload.queuedCount = downloadQueue.length;
+    saveStatus(activeDownload);
+    sendResponse({ ok: true, queued: true, position: downloadQueue.length, status: publicStatus(activeDownload) });
+    return;
+  }
+  const started = runDownload(request);
+  sendResponse(
+    started
+      ? { ok: true, queued: false, position: 0, status: publicStatus(activeDownload) }
+      : { ok: false, error: "Could not connect to the native download host" }
+  );
+}
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.action === "startDownload") {
+  if (request.action === "startDownload" || request.action === "queueDownload") {
     startDownload(request, sendResponse);
     return false;
   }
 
   if (request.action === "getDownloadStatus") {
+    if (request.url && statusByUrl.has(request.url)) {
+      sendResponse(statusByUrl.get(request.url));
+      return false;
+    }
     chrome.storage.local.get(DOWNLOAD_STATUS_KEY, (items) => {
       sendResponse(items[DOWNLOAD_STATUS_KEY] || { state: "idle" });
     });

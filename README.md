@@ -7,6 +7,7 @@ Unlike browser-only downloaders that are blocked by YouTube's adaptive streaming
 ## Features
 
 - Download any YouTube video directly from the browser
+- Queue downloads from a video page, homepage, search results, or sidebar recommendations
 - Quality picker: Best, 1080p, 720p, 480p, 360p, or audio-only (MP3)
 - Shows video title and thumbnail in the popup
 - "Show in Finder" button after download completes

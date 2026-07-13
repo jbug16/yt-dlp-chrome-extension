@@ -12,6 +12,7 @@ import struct
 import subprocess
 import sys
 import traceback
+import re
 
 LOG_FILE = "/tmp/yt_dlp_host.log"
 
@@ -48,6 +49,8 @@ def download_video(url, fmt, audio_only):
     cmd = [
         YTDLP,
         "--no-playlist",
+        "--newline",
+        "--progress-template", "download:%(progress._percent_str)s",
         "--ffmpeg-location", FFMPEG,
         "-f", fmt,
         "--merge-output-format", "mp4",
@@ -59,6 +62,8 @@ def download_video(url, fmt, audio_only):
         cmd = [
             YTDLP,
             "--no-playlist",
+            "--newline",
+            "--progress-template", "download:%(progress._percent_str)s",
             "--ffmpeg-location", FFMPEG,
             "-f", fmt,
             "--extract-audio",
@@ -70,20 +75,28 @@ def download_video(url, fmt, audio_only):
     log(f"Running: {' '.join(cmd)}")
 
     try:
-        result = subprocess.run(
+        process = subprocess.Popen(
             cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
-            timeout=600,
+            bufsize=1,
         )
+        output_lines = []
+        for line in process.stdout:
+            output_lines.append(line)
+            match = re.search(r"^\s*([0-9]+(?:\.[0-9]+)?)%\s*$", line)
+            if match:
+                send_message({"status": "progress", "percent": float(match.group(1))})
+        process.wait(timeout=600)
+        output = "".join(output_lines)
 
-        log(f"Return code: {result.returncode}")
-        log(f"Stdout: {result.stdout[:500]}")
-        log(f"Stderr: {result.stderr[:500]}")
+        log(f"Return code: {process.returncode}")
+        log(f"Output: {output[:1000]}")
 
-        if result.returncode == 0:
+        if process.returncode == 0:
             filename = ""
-            for line in result.stdout.splitlines():
+            for line in output.splitlines():
                 if "Destination:" in line:
                     filename = line.split("Destination:")[-1].strip()
                 elif "has already been downloaded" in line:
@@ -100,7 +113,7 @@ def download_video(url, fmt, audio_only):
 
             return {"status": "complete", "filename": filename, "filepath": filepath}
         else:
-            error_msg = result.stderr.strip() or result.stdout.strip()
+            error_msg = output.strip()
             if len(error_msg) > 300:
                 error_msg = error_msg[:300] + "..."
             return {"status": "error", "message": error_msg}
